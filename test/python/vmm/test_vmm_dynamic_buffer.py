@@ -24,7 +24,13 @@ They take turns: between two syncs either the owner changes memory or the peers
 transfer. At each sync the owner checks that the peers' writes landed and refills
 the chunks they wrote. Every check is collected and reported at the end.
 
-These tests are skipped unless NIXL_VMM_TEST names a path, e.g.:
+After each change the peers check the arena's layout: every chunk is read on its
+own, every hole must return a NIXL error, the longest run of mapped chunks is
+read and written as one request, and a request half in each hole and half in a
+neighbouring mapped chunk must fail.
+
+The tests need two GPUs, cuda-python (pip install cuda-python), and the UCX
+backend. They are skipped unless NIXL_VMM_TEST names a path, e.g.:
 
     NIXL_VMM_TEST=nvlink pytest -s test/python/vmm
     NIXL_VMM_TEST=rdma pytest -s test/python/vmm -k shrink
@@ -718,7 +724,10 @@ def _identical_reload_noop(w):
 
 
 def _register_empty_then_map(w, reload):
-    """Register an unmapped range, load it, then map chunk 0."""
+    """Register a range with nothing mapped, load it, then map chunk 0.
+
+    Chunk 0 transfers and chunk 1 stays a hole.
+    """
     w.setup("a", 2, ())
     w.change("map0", "map", "a", 0, OLD, load=reload)
     w.checked("map0", "a", {0: OLD, 1: None})
@@ -795,7 +804,10 @@ def _shrink(w, reload):
 
 
 def _hole_grow_unmap_remap(w, reload):
-    """Fill the hole, remap chunk 0 twice, unmap chunk 1, then map it again."""
+    """Fill the hole, remap chunk 0 twice, unmap chunk 1, then map it again.
+
+    After each step the layout matches and each retired allocation is untouched.
+    """
     w.setup("a", 2, (0,))
     w.checked("initial", "a", {0: OLD, 1: None})
     w.change("map1", "map", "a", 1, NEW, load=reload)
@@ -815,7 +827,10 @@ def _hole_grow_unmap_remap(w, reload):
 
 
 def _long_lifetime_sequence(w, reload):
-    """Twelve changes on one five-chunk buffer, every position checked after each."""
+    """Twelve changes on one five-chunk buffer.
+
+    After each change the layout matches and each retired allocation is untouched.
+    """
     steps = [
         ("map1", "map", 1, NEW),
         ("remap0", "remap", 0, NEW),
@@ -846,7 +861,13 @@ def _long_lifetime_sequence(w, reload):
 
 
 def _sparse_grow_and_change(w, reload):
-    """Only the ends of six chunks are mapped; fill, remap, and unmap across them."""
+    """Only the ends of six chunks are mapped; fill, remap, and unmap across them.
+
+    Each step changes several chunks before one registerMem: map a middle chunk and
+    remap the last, then unmap the first and map another middle one, then map the
+    rest. After each step the layout matches; after the remap the retired chunk is
+    untouched.
+    """
     w.setup("a", 6, (0, 5))
     w.checked("ends", "a", {0: OLD, 1: None, 2: None, 3: None, 4: None, 5: OLD})
     if w.owner:
@@ -903,7 +924,11 @@ def _subrange_register_updates(w, reload):
 
 
 def _grow_prefix(w, reload):
-    """Only chunk 0 of four is mapped. Grow to two chunks, then to four."""
+    """Only chunk 0 of four is mapped. Grow to two chunks, then to four.
+
+    The last step maps two chunks before one registerMem. The new chunks transfer,
+    and so does a request across all four.
+    """
     w.setup("a", 4, (0,))
     w.checked("prefix1", "a", {0: OLD, 1: None, 2: None, 3: None})
     w.change("grow2", "map", "a", 1, NEW, load=reload)
@@ -933,7 +958,11 @@ def _span_chunks(w, reload):
 
 
 def _change_chunk_shape(w, reload):
-    """Two single-chunk allocations become one over both, then split back."""
+    """Two single-chunk allocations become one over both, then split back.
+
+    After each step every chunk, and a request across all four, reaches the
+    current allocations.
+    """
     w.setup("a", 4, (0, 1, 2, 3))
     if w.owner:
         for index in (1, 2):
@@ -953,7 +982,11 @@ def _change_chunk_shape(w, reload):
 
 
 def _multi_peer_update(w, reload):
-    """Two peers on their own chunks; a third joins; one leaves."""
+    """Two peers on their own chunks; a third joins; one leaves.
+
+    Each peer follows every change to its chunk, the peer that joins late loads
+    once, and the remaining peers keep working after one leaves.
+    """
     both = ("peerA", "peerB")
     w.setup("a", 3, (0, 1), load=both)
     if w.name == "peerA":
