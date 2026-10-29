@@ -763,7 +763,7 @@ def _different_tuple_shared_physical(w, reload):
         w.register("initial", "b")
     w.sync("initial", load=True)
     if w.peer:
-        w.write("initial", "a", 1, None)
+        w.write("initial", "a", 1, WRITE)
         w.read("initial", "b", 0, WRITE)
     w.sync("shared")
     w.change("remap_a1", "remap", "a", 1, NEW, load=reload)
