@@ -27,7 +27,9 @@ the chunks they wrote. Every check is collected and reported at the end.
 After each change the peers check the arena's layout: every chunk is read on its
 own, every hole must return a NIXL error, the longest run of mapped chunks is
 read and written as one request, and a request half in each hole and half in a
-neighbouring mapped chunk must fail.
+neighbouring mapped chunk must fail. Scenarios about growing and registering
+skip the hole accesses; register_with_holes, shrink, hole_grow_unmap_remap,
+long_lifetime_sequence, and span_into_hole keep them.
 
 The tests need two GPUs, cuda-python (pip install cuda-python), and the UCX
 backend. They are skipped unless NIXL_VMM_TEST names a path, e.g.:
@@ -643,6 +645,7 @@ class _Rank:
         Every chunk is read on its own and every hole must return a NIXL error.
         The longest run of mapped chunks is read and written as one request, and a
         request half in each hole and half in a neighbouring mapped chunk must fail.
+        Positions left out of `layout` are not accessed.
         """
         for index, expect in sorted(layout.items()):
             self.read(label, arena, index, expect)
@@ -726,11 +729,11 @@ def _identical_reload_noop(w):
 def _register_empty_then_map(w, reload):
     """Register a range with nothing mapped, load it, then map chunk 0.
 
-    Chunk 0 transfers and chunk 1 stays a hole.
+    Chunk 0 transfers.
     """
     w.setup("a", 2, ())
     w.change("map0", "map", "a", 0, OLD, load=reload)
-    w.checked("map0", "a", {0: OLD, 1: None})
+    w.checked("map0", "a", {0: OLD})
 
 
 def _remap_in_place(w, reload):
@@ -790,7 +793,7 @@ def _different_tuple_shared_physical(w, reload):
 def _grow_into_hole(w, reload):
     """Map a hole; the new chunk and a request across both chunks transfer."""
     w.setup("a", 2, (0,))
-    w.checked("initial", "a", {0: OLD, 1: None})
+    w.checked("initial", "a", {0: OLD})
     w.change("map1", "map", "a", 1, NEW, load=reload)
     w.checked("map1", "a", {0: OLD, 1: NEW})
 
@@ -869,13 +872,13 @@ def _sparse_grow_and_change(w, reload):
     untouched.
     """
     w.setup("a", 6, (0, 5))
-    w.checked("ends", "a", {0: OLD, 1: None, 2: None, 3: None, 4: None, 5: OLD})
+    w.checked("ends", "a", {0: OLD, 5: OLD})
     if w.owner:
         w.vmm.map("a", 2, NEW)
         w.vmm.remap("a", 5, NEW)
         w.register("fill_mid_remap_end", "a")
     w.sync("fill_mid_remap_end", load=reload)
-    layout = {0: OLD, 1: None, 2: NEW, 3: None, 4: None, 5: NEW}
+    layout = {0: OLD, 2: NEW, 5: NEW}
     w.checked("fill_mid_remap_end", "a", layout)
     if w.owner:
         w.retired("fill_mid_remap_end", "a", OLD)
@@ -883,7 +886,7 @@ def _sparse_grow_and_change(w, reload):
         w.vmm.map("a", 3, NEW)
         w.register("drop_start_grow_mid", "a")
     w.sync("drop_start_grow_mid", load=reload)
-    layout = {0: None, 1: None, 2: NEW, 3: NEW, 4: None, 5: NEW}
+    layout = {2: NEW, 3: NEW, 5: NEW}
     w.checked("drop_start_grow_mid", "a", layout)
     if w.peer:
         w.write("drop_start_grow_mid", "a", 3, NEW)
@@ -913,12 +916,12 @@ def _span_into_hole(w, reload):
 def _subrange_register_updates(w, reload):
     """registerMem of a mapped chunk inside the registration updates it."""
     w.setup("a", 3, (0,))
-    w.checked("initial", "a", {0: OLD, 1: None})
+    w.checked("initial", "a", {0: OLD})
     if w.owner:
         w.vmm.map("a", 1, NEW)
         w.register("contained", "a", 1, 1)
     w.sync("contained", load=reload)
-    w.checked("contained", "a", {0: OLD, 1: NEW, 2: None})
+    w.checked("contained", "a", {0: OLD, 1: NEW})
     if w.peer:
         w.write("contained", "a", 1, NEW)
 
@@ -930,9 +933,9 @@ def _grow_prefix(w, reload):
     and so does a request across all four.
     """
     w.setup("a", 4, (0,))
-    w.checked("prefix1", "a", {0: OLD, 1: None, 2: None, 3: None})
+    w.checked("prefix1", "a", {0: OLD})
     w.change("grow2", "map", "a", 1, NEW, load=reload)
-    w.checked("grow2", "a", {0: OLD, 1: NEW, 2: None, 3: None})
+    w.checked("grow2", "a", {0: OLD, 1: NEW})
     if w.owner:
         for index in (2, 3):
             w.vmm.map("a", index, NEW)
@@ -1009,7 +1012,7 @@ def _multi_peer_update(w, reload):
     w.sync("B_left")
     w.change("unmap1", "unmap", "a", 1, load=reload and ("peerA", "peerC"))
     if w.name == "peerA":
-        w.layout("unmap1", "a", {0: OLD, 1: None, 2: NEW})
+        w.layout("unmap1", "a", {0: OLD, 2: NEW})
     if w.name == "peerC":
         w.read("unmap1", "a", 2, NEW)
 
