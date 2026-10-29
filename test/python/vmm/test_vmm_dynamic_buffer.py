@@ -752,7 +752,8 @@ def _prepared_request_rebuilt(w, reload):
 def _different_tuple_shared_physical(w, reload):
     """One allocation is mapped at a1 and at b0, in two registrations.
 
-    A write through a1 shows through b0. After a1 is remapped, b0 stays on the shared
+    A write through a1 shows through b0. The owner then refills the shared allocation
+    with 0x3C, which no request writes. After a1 is remapped, b0 stays on the shared
     allocation, and a write through b0 does not reach a1.
     """
     if w.owner:
@@ -763,20 +764,17 @@ def _different_tuple_shared_physical(w, reload):
         w.register("initial", "b")
     w.sync("initial", load=True)
     if w.peer:
-        w.write("initial", "a", 1, WRITE)
+        w.write("initial", "a", 1, REMAPPED)
         w.read("initial", "b", 0, WRITE)
     w.sync("shared")
     w.change("remap_a1", "remap", "a", 1, NEW, load=reload)
-    if w.peer:
-        w.layout("remap_a1", "a", {0: OLD, 1: NEW})
-        w.layout("remap_a1", "b", {0: WRITE, 1: OLD})
-    w.sync("remap_a1_checked")
+    # Requests through b reach the shared allocation, so it is checked before them.
+    w.checked("remap_a1", "a", {0: OLD, 1: NEW})
     if w.owner:
-        w.retired("remap_a1", "a", WRITE)
-        w.vmm.fill("b", 0, OLD)
-    w.sync("refilled")
+        w.retired("remap_a1", "a", REMAPPED)
+    w.checked("remap_a1", "b", {0: REMAPPED, 1: OLD})
     if w.peer:
-        w.write("remap_a1", "b", 0, OLD)
+        w.write("remap_a1", "b", 0, REMAPPED)
         w.read("remap_a1", "a", 1, NEW)
 
 
