@@ -266,7 +266,7 @@ class _Vmm:
         try:
             _cu(cuda.cuMemMap(scratch, chunk.size, 0, chunk.handle, 0), "cuMemMap")
             self._access(scratch, chunk.size)
-            return self.matches(scratch, pattern)
+            return self.matches(scratch, pattern, chunk.size)
         finally:
             cuda.cuMemUnmap(scratch, chunk.size)
             cuda.cuMemAddressFree(scratch, chunk.size)
@@ -619,7 +619,7 @@ class _Rank:
         self.check(f"{where}:write:{state}", _failed_cleanly(state))
 
     def into_hole(self, label, arena, mapped, hole, pattern):
-        """A chunk-long request from the middle of a mapped chunk into a hole."""
+        """A chunk-long request, half in a hole and half in a neighbouring mapped chunk."""
         c = self.chunk
         start = min(mapped, hole) * c + c // 2
         self._must_fail(f"{label}:{arena}{mapped}_into_hole{hole}", arena, start, c)
@@ -636,7 +636,7 @@ class _Rank:
 
         Every chunk is read on its own and every hole must return a NIXL error.
         The longest run of mapped chunks is read and written as one request, and a
-        request from a neighbouring mapped chunk into each hole must fail.
+        request half in each hole and half in a neighbouring mapped chunk must fail.
         """
         for index, expect in sorted(layout.items()):
             self.read(label, arena, index, expect)
