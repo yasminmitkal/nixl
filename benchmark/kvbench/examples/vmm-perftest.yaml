@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# vmm-perftest: every value below is the default, except path.
+# path selects the CUDA handle type: nvlink exports fabric handles, rdma exports
+# POSIX file descriptors. The transports come from UCX_TLS, set by the launcher.
+path: nvlink
+patterns: [grow, shrink, ends, remap]
+register: [full, partial]
+metadata: [partial, agent]
+ops: [WRITE, READ]
+chunk_units: [1, 4, 16]
+chunks: 8
+payload: 4096
+iters: 5
+warmup_iters: 1
+xfer_iters: 10
+transfer_timeout_sec: 15
+exchange_timeout_sec: 300

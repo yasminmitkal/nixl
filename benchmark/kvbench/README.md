@@ -240,6 +240,7 @@ Commands:
   plan                    Display the recommended configuration for...
   profile                 Run nixlbench
   sequential-ct-perftest  Run sequential custom traffic performance test...
+  vmm-perftest            Time every NIXL call while a VMM buffer changes...
 ```
 
 ## Command Line Arguments
@@ -387,6 +388,14 @@ Benchmark the performance of one traffic pattern. The pattern is run in multiple
 **Reports**: CT Perftest reports total latency (time elapsed between the first rank started until the last rank finished), average time per iteration, total size sent over the network, and average bandwidth by rank.
 
 **Important note**: GPU memory is allocated with pytorch on the GPU specified by the `CUDA_VISIBLE_DEVICE` environment variable, make sure that each process sets this variable to the right device.
+
+### VMM Perftest
+
+Times every NIXL call while one CUDA VMM buffer changes its mapping: map, register, metadata, load on the peer, prepare, and each transfer, separately for every step of a grow, shrink, ends, or remap sequence. Runs on exactly 2 ranks. See [docs/vmm-perftest.md](docs/vmm-perftest.md).
+
+```bash
+python main.py vmm-perftest examples/vmm-perftest.yaml --json-output-path ./vmm.json
+```
 
 ## Examples
 

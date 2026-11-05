@@ -29,6 +29,7 @@ dependencies = [
     "tqdm==4.66.5",
     "numpy",
     "nixl",
+    "cuda-python",
 ]
 
 [tool.setuptools.packages.find]
