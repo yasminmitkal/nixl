@@ -29,7 +29,7 @@ own, every hole must return a NIXL error, the longest run of mapped chunks is
 read and written as one request, and a request half in each hole and half in a
 neighbouring mapped chunk must fail. Scenarios about growing and registering
 skip the hole accesses; register_with_holes, shrink, hole_grow_unmap_remap,
-long_lifetime_sequence, and span_into_hole keep them.
+long_lifetime_sequence, span_into_hole, and register_inside_allocations keep them.
 
 The tests need two GPUs, cuda-python (pip install cuda-python), and the UCX
 backend. They are skipped unless NIXL_VMM_TEST names a path, e.g.:
@@ -984,6 +984,37 @@ def _change_chunk_shape(w, reload):
     w.checked("split1_2", "a", {0: OLD, 1: OLD, 2: OLD, 3: OLD})
 
 
+def _register_inside_allocations(w, reload):
+    """Chunks 1-4 of two three-chunk allocations are registered.
+
+    The registration starts in the middle of the first allocation and ends in the
+    middle of the second. A request outside it fails. The second allocation is
+    replaced by a one-chunk allocation at chunk 3, which leaves chunk 4 a hole, and
+    then the first one is replaced, so the registration again starts in its middle.
+    """
+    if w.owner:
+        w.vmm.reserve("a", 6)
+        w.vmm.map("a", 0, OLD, count=3)
+        w.vmm.map("a", 3, OLD, count=3)
+        w.register("initial", "a", 1, 4)
+    w.sync("initial", load=True)
+    if w.peer:
+        w._must_fail("initial:a0_outside_registration", "a", 0, PAYLOAD)
+    w.checked("initial", "a", {1: OLD, 2: OLD, 3: OLD, 4: OLD})
+    if w.owner:
+        w.vmm.unmap("a", 3)
+        w.vmm.map("a", 3, NEW)
+        w.register("shrink_second", "a", 1, 4)
+    w.sync("shrink_second", load=reload)
+    w.checked("shrink_second", "a", {1: OLD, 2: OLD, 3: NEW, 4: None})
+    if w.owner:
+        w.vmm.unmap("a", 0)
+        w.vmm.map("a", 0, REMAPPED, count=3)
+        w.register("replace_first", "a", 1, 4)
+    w.sync("replace_first", load=reload)
+    w.checked("replace_first", "a", {1: REMAPPED, 2: REMAPPED, 3: NEW, 4: None})
+
+
 def _multi_peer_update(w, reload):
     """Two peers on their own chunks; a third joins; one leaves.
 
@@ -1080,6 +1111,7 @@ SCENARIOS = [
     _scenario(_grow_prefix, True),
     _scenario(_span_chunks, True),
     _scenario(_change_chunk_shape, True),
+    _scenario(_register_inside_allocations, True),
     _scenario(_multi_peer_update, True, ("peerA", "peerB", "peerC")),
     _scenario(_different_tuple_adjacent, True),
     # Mixed
