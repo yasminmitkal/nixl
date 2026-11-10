@@ -946,6 +946,27 @@ def _grow_prefix(w, reload):
         w.write("grow4", "a", 3, NEW)
 
 
+def _grow_toward_start(w, reload):
+    """Only the last of four chunks is mapped. Grow to two chunks, then to four.
+
+    It grows toward the start, so every registration until the last starts in a
+    hole. The last step maps two chunks before one registerMem. The new chunks
+    transfer, and so does a request across all four.
+    """
+    w.setup("a", 4, (3,))
+    w.checked("suffix1", "a", {3: OLD})
+    w.change("grow2", "map", "a", 2, NEW, load=reload)
+    w.checked("grow2", "a", {2: NEW, 3: OLD})
+    if w.owner:
+        for index in (1, 0):
+            w.vmm.map("a", index, NEW)
+        w.register("grow4", "a")
+    w.sync("grow4", load=reload)
+    w.checked("grow4", "a", {0: NEW, 1: NEW, 2: NEW, 3: OLD})
+    if w.peer:
+        w.write("grow4", "a", 0, NEW)
+
+
 def _span_chunks(w, reload):
     """A request across three chunks, before and after the middle one is remapped."""
     w.setup("a", 4, (0, 1, 2, 3))
@@ -1109,6 +1130,7 @@ SCENARIOS = [
     # With another loadRemote
     _scenario(_subrange_register_updates, True),
     _scenario(_grow_prefix, True),
+    _scenario(_grow_toward_start, True),
     _scenario(_span_chunks, True),
     _scenario(_change_chunk_shape, True),
     _scenario(_register_inside_allocations, True),
