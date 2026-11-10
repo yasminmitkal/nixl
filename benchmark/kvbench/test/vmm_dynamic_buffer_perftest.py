@@ -562,6 +562,7 @@ def edges_match(ptr: int, size: int, value: int) -> bool:
 _HEADER = re.compile(
     r"\|\s*remote memory (write|read) by ucp_\w+\*\S*\s+(.*?)\s*\|\s*$"
 )
+_ANY_HEADER = re.compile(r"\|\s*.+ by ucp_\w+\*")
 _ROW = re.compile(
     r"\|\s*(\d+[KMGT]?)\.\.(inf|\d+[KMGT]?)\s*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|\s*$"
 )
@@ -582,6 +583,9 @@ def transport(lines: List[str], op: str, size: int) -> str:
             current = (
                 header.group(1) == want and len(_CUDA.findall(header.group(2))) >= 2
             )
+            continue
+        if _ANY_HEADER.search(line):
+            current = False
             continue
         row = _ROW.search(line)
         if current and row and _size(row.group(1)) <= size <= _size(row.group(2)):
