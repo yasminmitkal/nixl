@@ -10,8 +10,13 @@ reads or writes the owner's chunks while the owner maps, remaps, and unmaps them
   updates it in place. A descriptor fully inside a registration updates it; one
   that extends outside it is rejected.
 - The metadata is stable across map, unmap, and remap. A peer follows every change
-  without another loadRemote, and another loadRemote is a no-op that keeps the
-  remote name.
+  without another loadRemote, and another loadRemote of the same metadata is a
+  no-op that keeps the remote name.
+- With NIXL_VMM_RELOAD=1 the peers instead load the metadata again after every
+  registerMem that follows a change, and the new metadata replaces the old. The
+  expected results are the same. A request prepared before a reload must be
+  prepared again, so the scenarios about a prepared request or a peer that does
+  not load again run only without it.
 - Access to a hole (an unmapped chunk) returns a NIXL error, and the peer stays
   usable afterwards. A timeout or a completed transfer fails.
 
@@ -36,7 +41,9 @@ backend. They are skipped unless NIXL_VMM_TEST names a path, e.g.:
 
     NIXL_VMM_TEST=nvlink pytest -s test/python/vmm
     NIXL_VMM_TEST=rdma pytest -s test/python/vmm -k shrink
+    NIXL_VMM_TEST=nvlink NIXL_VMM_RELOAD=1 pytest -s test/python/vmm
 
+NIXL_VMM_RELOAD (0 or 1, default 0) selects the reload mode described above.
 NIXL_VMM_HANDLE (fabric or posix) overrides the allocation handle type, which
 defaults to fabric for nvlink and posix for rdma. NIXL_VMM_CHUNK_UNITS sets the
 chunk size in multiples of the allocation granularity (default 1). UCX_TLS and,
@@ -90,6 +97,9 @@ def vmm_config(backend_name, monkeypatch):
     handle = os.environ.get("NIXL_VMM_HANDLE") or DEFAULT_HANDLE[path]
     if handle not in ("fabric", "posix"):
         pytest.fail(f"NIXL_VMM_HANDLE must be fabric or posix, not {handle!r}")
+    reload = os.environ.get("NIXL_VMM_RELOAD") or "0"
+    if reload not in ("0", "1"):
+        pytest.fail(f"NIXL_VMM_RELOAD must be 0 or 1, not {reload!r}")
     try:
         import cuda.bindings.driver  # noqa: F401
     except ImportError:
@@ -103,6 +113,7 @@ def vmm_config(backend_name, monkeypatch):
         "backend": backend_name,
         "handle": handle,
         "chunk_units": int(os.environ.get("NIXL_VMM_CHUNK_UNITS", "1")),
+        "reload": reload == "1",
     }
 
 
@@ -677,10 +688,11 @@ def _register_with_holes(w):
     w.checked("initial", "a", {0: OLD, 1: None, 2: OLD})
 
 
-def _exact_register_is_remap(w):
+def _exact_register_is_remap(w, reload):
     """A second registerMem of the same range after a remap updates the same entry.
 
-    The peer loads again. One deregister succeeds and a second one fails.
+    The peer reaches the new allocation. One deregister succeeds and a second one
+    fails.
     """
     if w.owner:
         w.reserve("a", 2, (0, 1))
@@ -689,7 +701,8 @@ def _exact_register_is_remap(w):
     if w.owner:
         w.vmm.remap("a", 0, NEW)
         w.register("second", "a")
-    w.sync("second", load=True)
+    w.sync("second", load=reload)
+    w.checked("second", "a", {0: NEW, 1: OLD})
     if w.owner:
         w.deregister("once", 1)
         w.deregister("twice", 0, expect_ok=False)
@@ -719,11 +732,10 @@ def _identical_reload_noop(w):
 
 
 # ===== Changes after the peer has loaded =====
-# Each takes `reload`. With False the peer keeps the metadata of its first load and
-# must follow every change. With True every registerMem is followed by loadRemote,
-# which must be a no-op. A peer that joins later always loads once.
-
-# ----- without another loadRemote -----
+# Each takes `reload`, set by NIXL_VMM_RELOAD. With False the peers keep the metadata
+# of their first load and must follow every change. With True every registerMem after
+# a change is followed by loadRemote, which replaces the metadata. The expected
+# results are the same. A peer that joins later always loads once.
 
 
 def _register_empty_then_map(w, reload):
@@ -747,18 +759,6 @@ def _remap_in_place(w, reload):
     w.sync("written")
     if w.owner:
         w.retired("remap0", "a", OLD)
-
-
-def _prepared_request_rebuilt(w, reload):
-    """A READ prepared before a remap reaches the new allocation when posted after it."""
-    w.setup("a", 1, (0,))
-    if w.peer:
-        w.prepare("before", "a", 0)
-    w.sync("prepared")
-    w.change("remap0", "remap", "a", 0, NEW, load=reload)
-    if w.peer:
-        w.read("remap0", "a", 0, NEW)
-        w.post_prepared("remap0", "before", NEW)
 
 
 def _different_tuple_shared_physical(w, reload):
@@ -908,9 +908,6 @@ def _span_into_hole(w, reload):
     w.change("fill2", "map", "a", 2, NEW, load=reload)
     if w.peer:
         w.span("fill2", "a", 1, [OLD, NEW])
-
-
-# ----- with another loadRemote -----
 
 
 def _subrange_register_updates(w, reload):
@@ -1093,7 +1090,21 @@ def _different_tuple_adjacent(w, reload):
         w.cross("remap_a1", NEW, OLD)
 
 
-# ===== Mixed =====
+# ===== Stable metadata only =====
+# These need metadata that stays the same across a change, so they are skipped with
+# NIXL_VMM_RELOAD=1.
+
+
+def _prepared_request_rebuilt(w):
+    """A READ prepared before a remap reaches the new allocation when posted after it."""
+    w.setup("a", 1, (0,))
+    if w.peer:
+        w.prepare("before", "a", 0)
+    w.sync("prepared")
+    w.change("remap0", "remap", "a", 0, NEW)
+    if w.peer:
+        w.read("remap0", "a", 0, NEW)
+        w.post_prepared("remap0", "before", NEW)
 
 
 def _one_peer_reloads(w):
@@ -1104,30 +1115,29 @@ def _one_peer_reloads(w):
         w.read("remap0", "a", 0, NEW)
 
 
-def _scenario(fn, reload=None, peers=("peerA",)):
-    return pytest.param(fn, reload, peers, id=fn.__name__.lstrip("_"))
+def _scenario(fn, changes=False, peers=("peerA",), stable_only=False):
+    """`changes`: fn takes `reload`. `stable_only`: skipped with NIXL_VMM_RELOAD=1."""
+    return pytest.param(fn, changes, stable_only, peers, id=fn.__name__.lstrip("_"))
 
 
 SCENARIOS = [
     # Registration rules
     _scenario(_never_remap),
     _scenario(_register_with_holes),
-    _scenario(_exact_register_is_remap),
+    _scenario(_exact_register_is_remap, True),
     _scenario(_subrange_register_straddle_rejected, peers=()),
     # Reload only
     _scenario(_identical_reload_noop),
-    # Without another loadRemote
-    _scenario(_register_empty_then_map, False),
-    _scenario(_remap_in_place, False),
-    _scenario(_prepared_request_rebuilt, False),
-    _scenario(_different_tuple_shared_physical, False),
-    _scenario(_grow_into_hole, False),
-    _scenario(_shrink, False),
-    _scenario(_hole_grow_unmap_remap, False),
-    _scenario(_long_lifetime_sequence, False),
-    _scenario(_sparse_grow_and_change, False),
-    _scenario(_span_into_hole, False),
-    # With another loadRemote
+    # Changes after the peer has loaded
+    _scenario(_register_empty_then_map, True),
+    _scenario(_remap_in_place, True),
+    _scenario(_different_tuple_shared_physical, True),
+    _scenario(_grow_into_hole, True),
+    _scenario(_shrink, True),
+    _scenario(_hole_grow_unmap_remap, True),
+    _scenario(_long_lifetime_sequence, True),
+    _scenario(_sparse_grow_and_change, True),
+    _scenario(_span_into_hole, True),
     _scenario(_subrange_register_updates, True),
     _scenario(_grow_prefix, True),
     _scenario(_grow_toward_start, True),
@@ -1136,17 +1146,18 @@ SCENARIOS = [
     _scenario(_register_inside_allocations, True),
     _scenario(_multi_peer_update, True, ("peerA", "peerB", "peerC")),
     _scenario(_different_tuple_adjacent, True),
-    # Mixed
-    _scenario(_one_peer_reloads, peers=("peerA", "peerB")),
+    # Stable metadata only
+    _scenario(_prepared_request_rebuilt, stable_only=True),
+    _scenario(_one_peer_reloads, peers=("peerA", "peerB"), stable_only=True),
 ]
 
 
-def _vmm_worker(rank, scenario, reload, names, exch, cfg):
+def _vmm_worker(rank, scenario, changes, names, exch, cfg):
     w = _Rank(rank, names, exch, cfg)
-    if reload is None:
-        scenario(w)
+    if changes:
+        scenario(w, cfg["reload"])
     else:
-        scenario(w, reload)
+        scenario(w)
     checks = w.finish()
     if w.owner:
         if w.skip:
@@ -1164,18 +1175,20 @@ def _vmm_worker(rank, scenario, reload, names, exch, cfg):
 
 
 @pytest.mark.timeout(1200)
-@pytest.mark.parametrize("scenario,reload,peers", SCENARIOS)
-def test_vmm_dynamic_buffer(scenario, reload, peers, vmm_config, capfd):
+@pytest.mark.parametrize("scenario,changes,stable_only,peers", SCENARIOS)
+def test_vmm_dynamic_buffer(scenario, changes, stable_only, peers, vmm_config, capfd):
     # One process per role, as in test_prep_mem_view. capfd.disabled() restores the
     # real fds: children writing from C under pytest's capture segfault on teardown.
     import torch.multiprocessing as mp
 
+    if stable_only and vmm_config["reload"]:
+        pytest.skip("needs stable metadata; runs without NIXL_VMM_RELOAD")
     names = ("owner", *peers)
     with tempfile.TemporaryDirectory(prefix="vmm_exch_") as exch:
         with capfd.disabled():
             mp.spawn(
                 _vmm_worker,
-                args=(scenario, reload, names, exch, vmm_config),
+                args=(scenario, changes, names, exch, vmm_config),
                 nprocs=len(names),
                 join=True,
             )
