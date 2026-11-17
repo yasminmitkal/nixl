@@ -35,6 +35,8 @@ read and written as one request, and a request half in each hole and half in a
 neighbouring mapped chunk must fail. Scenarios about growing and registering
 skip the hole accesses; register_with_holes, shrink, hole_grow_unmap_remap,
 long_lifetime_sequence, span_into_hole, and register_inside_allocations keep them.
+The hole accesses run only with NIXL_VMM_HOLE_ACCESS=1: without a hole check in
+UCX, an access to a hole crashes the peer instead of failing.
 
 The tests need two GPUs, cuda-python (pip install cuda-python), and the UCX
 backend. They are skipped unless NIXL_VMM_TEST names a path, e.g.:
@@ -44,6 +46,7 @@ backend. They are skipped unless NIXL_VMM_TEST names a path, e.g.:
     NIXL_VMM_TEST=nvlink NIXL_VMM_RELOAD=1 pytest -s test/python/vmm
 
 NIXL_VMM_RELOAD (0 or 1, default 0) selects the reload mode described above.
+NIXL_VMM_HOLE_ACCESS (0 or 1, default 0) enables the hole accesses.
 NIXL_VMM_HANDLE (fabric or posix) overrides the allocation handle type, which
 defaults to fabric for nvlink and posix for rdma. NIXL_VMM_CHUNK_UNITS sets the
 chunk size in multiples of the allocation granularity (default 1). UCX_TLS and,
@@ -100,6 +103,9 @@ def vmm_config(backend_name, monkeypatch):
     reload = os.environ.get("NIXL_VMM_RELOAD") or "0"
     if reload not in ("0", "1"):
         pytest.fail(f"NIXL_VMM_RELOAD must be 0 or 1, not {reload!r}")
+    hole_access = os.environ.get("NIXL_VMM_HOLE_ACCESS") or "0"
+    if hole_access not in ("0", "1"):
+        pytest.fail(f"NIXL_VMM_HOLE_ACCESS must be 0 or 1, not {hole_access!r}")
     try:
         import cuda.bindings.driver  # noqa: F401
     except ImportError:
@@ -114,6 +120,7 @@ def vmm_config(backend_name, monkeypatch):
         "handle": handle,
         "chunk_units": int(os.environ.get("NIXL_VMM_CHUNK_UNITS", "1")),
         "reload": reload == "1",
+        "hole_access": hole_access == "1",
     }
 
 
@@ -348,6 +355,7 @@ class _Rank:
         self.checks = []
         self.step = 0
         self.skip = ""
+        self.hole_access = cfg["hole_access"]
         if self.owner:
             self.vmm = _Vmm(self.gpu, cfg["handle"], cfg["chunk_units"])
             self.chunk = self.vmm.chunk
@@ -574,6 +582,8 @@ class _Rank:
 
     def read(self, label, arena, index, expect):
         """READ one chunk. `expect` is its pattern, or None for a hole that must fail."""
+        if expect is None and not self.hole_access:
+            return
         self._fill_local(PAYLOAD, 0)
         state = self._xfer("READ", arena, index * self.chunk, PAYLOAD)
         where = f"{label}:{arena}{index}:{state}"
@@ -639,6 +649,8 @@ class _Rank:
 
     def into_hole(self, label, arena, mapped, hole, pattern):
         """A chunk-long request, half in a hole and half in a neighbouring mapped chunk."""
+        if not self.hole_access:
+            return
         c = self.chunk
         start = min(mapped, hole) * c + c // 2
         self._must_fail(f"{label}:{arena}{mapped}_into_hole{hole}", arena, start, c)
