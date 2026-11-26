@@ -63,6 +63,9 @@ logger = get_logger(__name__)
 PATHS = ("nvlink", "rdma")
 PATTERNS = ("grow", "shrink", "ends", "remap")
 REGISTERS = ("full", "partial")
+# A partial register (only the changed chunk) overlaps the registration of the
+# whole reserve, which is not supported yet. It runs only with --partial-register.
+DEFAULT_REGISTERS = ("full",)
 METADATA = ("partial", "agent")
 OPS = ("WRITE", "READ")
 HANDLE_TYPES = {"nvlink": "fabric", "rdma": "posix"}
@@ -206,7 +209,7 @@ def _as_tuple(value: Any) -> Tuple[Any, ...]:
 class VmmPerftestConfig:
     path: str
     patterns: Tuple[str, ...] = PATTERNS
-    register: Tuple[str, ...] = REGISTERS
+    register: Tuple[str, ...] = DEFAULT_REGISTERS
     metadata: Tuple[str, ...] = METADATA
     ops: Tuple[str, ...] = OPS
     chunk_units: Tuple[int, ...] = (1, 4, 16)
@@ -219,7 +222,9 @@ class VmmPerftestConfig:
     exchange_timeout_sec: float = 300.0
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "VmmPerftestConfig":
+    def from_dict(
+        cls, data: Dict[str, Any], partial_register: bool = False
+    ) -> "VmmPerftestConfig":
         known = {item.name for item in fields(cls)}
         unknown = sorted(set(data) - known)
         if unknown:
@@ -230,6 +235,17 @@ class VmmPerftestConfig:
         for key in ("patterns", "register", "metadata", "ops", "chunk_units"):
             if key in values:
                 values[key] = _as_tuple(values[key])
+        if "partial" in values.get("register", ()) and not partial_register:
+            raise ValueError(
+                "register: partial is not supported yet, pass --partial-register "
+                "to run it"
+            )
+        if partial_register:
+            values["register"] = tuple(
+                dict.fromkeys(
+                    values.get("register", DEFAULT_REGISTERS) + ("partial",)
+                )
+            )
         if "ops" in values:
             values["ops"] = tuple(
                 dict.fromkeys(str(op).upper() for op in values["ops"])

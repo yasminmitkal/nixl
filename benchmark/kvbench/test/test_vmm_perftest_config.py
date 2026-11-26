@@ -120,6 +120,7 @@ def test_step_info_span_only_with_read():
 def test_config_defaults_and_lists():
     config = vmm.VmmPerftestConfig.from_dict({"path": "rdma"})
     assert config.patterns == vmm.PATTERNS
+    assert config.register == ("full",)
     assert config.ops == ("WRITE", "READ")
     assert config.chunk_units == (1, 4, 16)
     assert (config.iters, config.warmup_iters, config.xfer_iters) == (5, 1, 10)
@@ -139,6 +140,7 @@ def test_config_defaults_and_lists():
         {"path": "ksm"},
         {"path": "rdma", "patterns": ["delta"]},
         {"path": "rdma", "register": ["subrange"]},
+        {"path": "rdma", "register": ["full", "partial"]},
         {"path": "rdma", "metadata": ["delta"]},
         {"path": "rdma", "ops": ["SEND"]},
         {"path": "rdma", "chunk_units": [0]},
@@ -154,6 +156,19 @@ def test_config_rejects(data):
         vmm.VmmPerftestConfig.from_dict(data)
 
 
+def test_partial_register_flag():
+    config = vmm.VmmPerftestConfig.from_dict({"path": "rdma"}, partial_register=True)
+    assert config.register == ("full", "partial")
+    config = vmm.VmmPerftestConfig.from_dict(
+        {"path": "rdma", "register": ["partial"]}, partial_register=True
+    )
+    assert config.register == ("partial",)
+    config = vmm.VmmPerftestConfig.from_dict(
+        {"path": "rdma", "register": ["full"]}, partial_register=True
+    )
+    assert config.register == ("full", "partial")
+
+
 def test_example_config_loads():
     yaml = pytest.importorskip("yaml")
     example = os.path.join(p, "..", "examples", "vmm-perftest.yaml")
@@ -164,7 +179,8 @@ def test_example_config_loads():
 
 def test_cases_sweep():
     config = vmm.VmmPerftestConfig.from_dict(
-        {"path": "nvlink", "patterns": ["grow", "ends"], "chunk_units": [1, 4]}
+        {"path": "nvlink", "patterns": ["grow", "ends"], "chunk_units": [1, 4]},
+        partial_register=True,
     )
     found = vmm.cases(config, G)
     assert len(found) == 2 * 2 * 2 * 2

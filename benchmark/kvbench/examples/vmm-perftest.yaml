@@ -18,7 +18,7 @@
 # POSIX file descriptors. The transports come from UCX_TLS, set by the launcher.
 path: nvlink
 patterns: [grow, shrink, ends, remap]
-register: [full, partial]
+register: [full]       # partial needs --partial-register
 metadata: [partial, agent]
 ops: [WRITE, READ]
 chunk_units: [1, 4, 16]

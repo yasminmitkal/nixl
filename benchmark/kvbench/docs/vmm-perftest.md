@@ -27,7 +27,7 @@ Patterns:
 - **ends**: start with the first and last chunk, map the middle from both ends inward
 - **remap**: start with every chunk, replace each chunk's backing one per step
 
-Step 0 always registers the whole reserve. On later steps `register: full` registers the whole reserve again, and `register: partial` registers only the changed chunk.
+Step 0 always registers the whole reserve. On later steps `register: full` registers the whole reserve again, and `register: partial` registers only the changed chunk. A partial register overlaps the registration of the whole reserve, which is not supported yet, so `partial` runs only with `--partial-register`. Listing `partial` in the YAML without the flag is an error.
 
 ## Failures
 A NIXL call that raises, or a transfer that ends in an error, fails the run. The error names the configuration, the step, and the call. Transfers into a hole are the exception: they are timed until they complete or return an error, whichever happens. A transfer that does not finish within `transfer_timeout_sec` fails the run.
@@ -51,7 +51,7 @@ The YAML file holds the sweep. Every key except `path` has the default shown:
 ```yaml
 path: nvlink            # nvlink: fabric handles; rdma: POSIX fd handles
 patterns: [grow, shrink, ends, remap]
-register: [full, partial]
+register: [full]        # partial is not supported yet: add it with --partial-register
 metadata: [partial, agent]
 ops: [WRITE, READ]
 chunk_units: [1, 4, 16] # chunk size in units of the CUDA allocation granularity

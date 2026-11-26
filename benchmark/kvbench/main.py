@@ -839,12 +839,22 @@ def ct_perftest(config_file, verify_buffers, print_recv_buffers):
     help="Path to save JSON output",
     default=None,
 )
-def vmm_perftest(config_file, verify_buffers, report_transport, json_output_path):
+@click.option(
+    "--partial-register/--no-partial-register",
+    default=False,
+    help="Also run register: partial (register only the changed chunk). "
+    "Not supported yet, so it is off by default",
+)
+def vmm_perftest(
+    config_file, verify_buffers, report_transport, json_output_path, partial_register
+):
     """Time every NIXL call while a VMM buffer changes its mapping (2 ranks)"""
-    from test.vmm_dynamic_buffer_perftest import VMMPerftest, VmmPerftestConfig
+    from test.vmm_dynamic_buffer_perftest import VmmPerftestConfig, VMMPerftest
 
     with open(config_file, "r") as f:
-        config = VmmPerftestConfig.from_dict(yaml.safe_load(f) or {})
+        config = VmmPerftestConfig.from_dict(
+            yaml.safe_load(f) or {}, partial_register=partial_register
+        )
 
     perftest = VMMPerftest(
         config, verify_buffers=verify_buffers, report_transport=report_transport
